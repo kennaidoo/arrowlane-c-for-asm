@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install a toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran cmake
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      # The numbers are part of the deliverable, so the job prints them.
+      - name: Bench
+        run: ./build/arrowlane-c-for-asm bench --rows 200000 --repeats 5

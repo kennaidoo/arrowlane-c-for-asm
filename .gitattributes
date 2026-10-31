@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.S text eol=lf
+*.f90 text eol=lf
+*.c text eol=lf
+*.h text eol=lf
