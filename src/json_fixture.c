@@ -67,27 +67,6 @@ static void w_json_string(struct writer *w, const char *text) {
     w_text(w, "\"");
 }
 
-/* Shortest decimal that reads back as the same double. */
-static void w_double(struct writer *w, double value) {
-    if (value == 0.0) {
-        w_text(w, signbit(value) ? "-0.0" : "0.0");
-        return;
-    }
-    if (value == (double)(int64_t)value && fabs(value) < 1e16) {
-        w_format(w, "%.1f", value);
-        return;
-    }
-    char scratch[40];
-    for (int precision = 1; precision <= 17; ++precision) {
-        snprintf(scratch, sizeof scratch, "%.*g", precision, value);
-        if (strtod(scratch, NULL) == value) {
-            w_text(w, scratch);
-            return;
-        }
-    }
-    w_format(w, "%.17g", value);
-}
-
 /* Days since 1970-01-01 to a civil date. Howard Hinnant's algorithm. */
 static void civil_from_days(int64_t days, int *year, unsigned *month, unsigned *day) {
     int64_t z = days + 719468;
@@ -167,11 +146,22 @@ enum aln_status aln_json_fixture_encode(const struct aln_fixture *fixture, char 
         if (fixture->name_is_null[row]) {
             w_text(&w, "null");
         } else {
-            w_json_string(&w, fixture->names[row]);
+            /* The reference names a row from its index, so there is nothing to store. */
+            char name[32];
+            const int length = snprintf(name, sizeof name, "row-%llu", (unsigned long long)row);
+            w_json_string(&w, name);
+            (void)length;
         }
 
         w_text(&w, ",\"score\":");
-        w_double(&w, fixture->score[row]);
+        {
+            char number[40];
+            const size_t length = aln_format_double(number, sizeof number, fixture->score[row]);
+            if (length == 0) {
+                return ALN_ERR_INVALID;
+            }
+            w_bytes(&w, number, length);
+        }
 
         w_text(&w, ",\"ok\":");
         w_text(&w, fixture->ok[row] ? "true" : "false");
@@ -186,7 +176,7 @@ enum aln_status aln_json_fixture_encode(const struct aln_fixture *fixture, char 
         w_timestamp(&w, fixture->ts_us[row]);
 
         w_text(&w, ",\"blob\":{\"$\":\"bin\",\"v\":\"");
-        if (aln_base64_encode((const uint8_t *)fixture->blob + row * 3u, 3, base64,
+        if (aln_base64_encode((const unsigned char *)fixture->blob + row * 3u, 3, base64,
                               sizeof base64) == 0) {
             return ALN_ERR_INVALID;
         }
@@ -198,7 +188,7 @@ enum aln_status aln_json_fixture_encode(const struct aln_fixture *fixture, char 
             return ALN_ERR_OVERSIZE;
         }
     }
-    if (written != NULL) {
+    if (written != nullptr) {
         *written = w.pos;
     }
     return ALN_OK;

@@ -23,47 +23,25 @@ static int g_checks = 0;
 
 static unsigned char *read_file(const char *path, size_t *length) {
     FILE *file = fopen(path, "rb");
-    if (file == NULL) {
-        return NULL;
+    if (file == nullptr) {
+        return nullptr;
     }
     fseek(file, 0, SEEK_END);
     const long size = ftell(file);
     fseek(file, 0, SEEK_SET);
     unsigned char *data = (unsigned char *)malloc((size_t)size);
-    if (data == NULL) {
+    if (data == nullptr) {
         fclose(file);
-        return NULL;
+        return nullptr;
     }
     *length = fread(data, 1, (size_t)size, file);
     fclose(file);
     return data;
 }
 
-static int build_rows3(struct aln_fixture *fixture, char **text_out, char ***names_out) {
-    static const char *kNames[3] = {NULL, "row-1", "row-2"};
-    fixture->rows = 3;
-    fixture->id = (int64_t *)calloc(3, sizeof(int64_t));
-    fixture->name_is_null = (int8_t *)calloc(3, sizeof(int8_t));
-    fixture->score = (double *)calloc(3, sizeof(double));
-    fixture->ok = (int8_t *)calloc(3, sizeof(int8_t));
-    fixture->day = (int32_t *)calloc(3, sizeof(int32_t));
-    fixture->amount = (int64_t *)calloc(3, sizeof(int64_t));
-    fixture->ts_us = (int64_t *)calloc(3, sizeof(int64_t));
-    fixture->blob = (int8_t *)calloc(3, 3);
-    fixture->names = kNames;
-    if (fixture->id == NULL || fixture->blob == NULL) {
-        return 0;
-    }
-    aln_fill_fixture(3, fixture->id, fixture->name_is_null, fixture->score, fixture->ok,
-                     fixture->day, fixture->amount, fixture->ts_us, fixture->blob);
-    (void)text_out;
-    (void)names_out;
-    return 1;
-}
-
 static void test_crc_known_vector(void) {
     /* The standard check value for this polynomial. */
-    CHECK(aln_crc32((const uint8_t *)"123456789", 9) == 0xCBF43926u);
+    CHECK(aln_crc32((const unsigned char *)"123456789", 9) == 0xCBF43926u);
 }
 
 static void test_crc_asm_matches_c(void) {
@@ -71,7 +49,7 @@ static void test_crc_asm_matches_c(void) {
         printf("note: no assembly kernel on this target, skipping the equality check\n");
         return;
     }
-    uint8_t buffer[4096];
+    unsigned char buffer[4096];
     uint32_t state = 12345u;
     for (size_t index = 0; index < sizeof buffer; ++index) {
         state = state * 1103515245u + 12345u;
@@ -85,12 +63,12 @@ static void test_crc_asm_matches_c(void) {
 static void test_payload_matches_reference(void) {
     size_t expected_len = 0;
     unsigned char *expected = read_file(ALN_FIXTURE_DIR "/golden3.payload", &expected_len);
-    CHECK(expected != NULL);
-    if (expected == NULL) {
+    CHECK(expected != nullptr);
+    if (expected == nullptr) {
         return;
     }
     struct aln_fixture fixture;
-    CHECK(build_rows3(&fixture, NULL, NULL));
+    CHECK(aln_fixture_create(3, &fixture) == ALN_OK);
     char *payload = (char *)malloc(8192);
     size_t payload_len = 0;
     CHECK(aln_json_fixture_encode(&fixture, payload, 8192, &payload_len) == ALN_OK);
@@ -103,6 +81,28 @@ static void test_payload_matches_reference(void) {
     }
     free(payload);
     free(expected);
+    aln_fixture_free(&fixture);
+}
+
+static void test_base64_round_trip(void) {
+    unsigned char raw[64];
+    for (size_t index = 0; index < sizeof raw; ++index) {
+        raw[index] = (uint8_t)(index * 37u);
+    }
+    for (size_t length = 0; length <= sizeof raw; ++length) {
+        char text[128];
+        unsigned char back[64];
+        CHECK(aln_base64_encode(raw, length, text, sizeof text) == ((length + 2) / 3) * 4);
+        if (length == 0) {
+            continue;
+        }
+        CHECK(aln_base64_decode(text, strlen(text), back, sizeof back) == length);
+        CHECK(memcmp(raw, back, length) == 0);
+    }
+    unsigned char scratch[8];
+    CHECK(aln_base64_decode("A", 1, scratch, sizeof scratch) == 0);
+    CHECK(aln_base64_decode("!!!!", 4, scratch, sizeof scratch) == 0);
+    CHECK(aln_base64_decode("QQ=A", 4, scratch, sizeof scratch) == 0);
 }
 
 static void test_frame_matches_reference(void) {
@@ -110,58 +110,26 @@ static void test_frame_matches_reference(void) {
     unsigned char *schema = read_file(ALN_FIXTURE_DIR "/golden3.schema", &schema_len);
     size_t expected_len = 0;
     unsigned char *expected = read_file(ALN_FIXTURE_DIR "/golden3.frame", &expected_len);
-    CHECK(schema != NULL && expected != NULL);
-    if (schema == NULL || expected == NULL) {
+    CHECK(schema != nullptr && expected != nullptr);
+    if (schema == nullptr || expected == nullptr) {
         return;
     }
     /* The schema file is the base64 text the reference wrote, so decode it back to
-     * the raw flatbuffer first, then let the frame encoder encode it again. */
-    static uint8_t raw[4096];
-    size_t raw_len = 0;
-    for (size_t index = 0; index + 3 < schema_len; index += 4) {
-        const char *quad = (const char *)schema + index;
-        int values[4];
-        for (int slot = 0; slot < 4; ++slot) {
-            const char character = quad[slot];
-            if (character >= 'A' && character <= 'Z') {
-                values[slot] = character - 'A';
-            } else if (character >= 'a' && character <= 'z') {
-                values[slot] = character - 'a' + 26;
-            } else if (character >= '0' && character <= '9') {
-                values[slot] = character - '0' + 52;
-            } else if (character == '+') {
-                values[slot] = 62;
-            } else if (character == '/') {
-                values[slot] = 63;
-            } else {
-                values[slot] = 0;
-            }
-        }
-        raw[raw_len++] = (uint8_t)((values[0] << 2) | (values[1] >> 4));
-        raw[raw_len++] = (uint8_t)(((values[1] & 0xF) << 4) | (values[2] >> 2));
-        raw[raw_len++] = (uint8_t)(((values[2] & 0x3) << 6) | values[3]);
-    }
-    /* Undo the padding the encoder added. */
-    while (raw_len > 0 && schema_len >= 1) {
-        const char last = (char)schema[schema_len - 1];
-        if (last == '=') {
-            --raw_len;
-            --schema_len;
-        } else {
-            break;
-        }
-    }
+     * the raw flatbuffer, then let the frame encoder encode it again. */
+    static unsigned char raw[4096];
+    const size_t raw_len = aln_base64_decode((const char *)schema, schema_len, raw, sizeof raw);
+    CHECK(raw_len > 0);
 
     struct aln_fixture fixture;
-    CHECK(build_rows3(&fixture, NULL, NULL));
+    CHECK(aln_fixture_create(3, &fixture) == ALN_OK);
     char *payload = (char *)malloc(8192);
     size_t payload_len = 0;
     CHECK(aln_json_fixture_encode(&fixture, payload, 8192, &payload_len) == ALN_OK);
 
-    static uint8_t wire[65536];
+    static unsigned char wire[65536];
     size_t wire_len = 0;
     CHECK(aln_frame_encode(ALN_LANE_JSON, 0, 3, 8, payload_len, raw, raw_len,
-                           "arrowlane/0.4.0", (const uint8_t *)payload, payload_len, wire,
+                           "arrowlane/0.4.0", (const unsigned char *)payload, payload_len, wire,
                            sizeof wire, &wire_len) == ALN_OK);
     CHECK(wire_len == 1372);
     CHECK(wire_len == expected_len);
@@ -179,13 +147,14 @@ static void test_frame_matches_reference(void) {
     free(payload);
     free(schema);
     free(expected);
+    aln_fixture_free(&fixture);
 }
 
 static void test_decode_and_errors(void) {
     size_t expected_len = 0;
     unsigned char *wire = read_file(ALN_FIXTURE_DIR "/golden3.frame", &expected_len);
-    CHECK(wire != NULL);
-    if (wire == NULL) {
+    CHECK(wire != nullptr);
+    if (wire == nullptr) {
         return;
     }
     struct aln_frame frame;
@@ -216,6 +185,7 @@ int main(void) {
     test_crc_known_vector();
     test_crc_asm_matches_c();
     test_payload_matches_reference();
+    test_base64_round_trip();
     test_frame_matches_reference();
     test_decode_and_errors();
     printf("%s: %d checks, %d failures\n", g_failures == 0 ? "ok" : "FAILED", g_checks, g_failures);

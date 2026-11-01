@@ -27,16 +27,16 @@ static void put_u64(uint8_t *p, uint64_t value) {
     }
 }
 
-static uint16_t get_u16(const uint8_t *p) {
+static uint16_t get_u16(const unsigned char *p) {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
-static uint32_t get_u32(const uint8_t *p) {
+static uint32_t get_u32(const unsigned char *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
            ((uint32_t)p[3] << 24);
 }
 
-static uint64_t get_u64(const uint8_t *p) {
+static uint64_t get_u64(const unsigned char *p) {
     uint64_t value = 0;
     for (int index = 0; index < 8; ++index) {
         value |= ((uint64_t)p[index]) << (8 * index);
@@ -66,6 +66,8 @@ const char *aln_status_text(enum aln_status status) {
         return "invalid argument";
     case ALN_ERR_NOMEM:
         return "out of memory";
+    case ALN_ERR_BUFFER_SMALL:
+        return "buffer too small";
     }
     return "unknown status";
 }
@@ -81,40 +83,30 @@ size_t aln_header_json(char *out, size_t cap, const char *media_type, uint64_t n
     return (size_t)written;
 }
 
-enum aln_status aln_frame_encode(uint8_t lane, uint16_t flags, uint64_t rows, uint64_t ncols,
-                                 uint64_t uncompressed_len, const uint8_t *schema,
-                                 size_t schema_len, const char *producer,
-                                 const uint8_t *payload, size_t payload_len, uint8_t *out,
-                                 size_t cap, size_t *written) {
+enum aln_status aln_frame_encode_b64(enum aln_lane lane, uint16_t flags, uint64_t rows,
+                                     uint64_t ncols,
+                                     uint64_t uncompressed_len, const char *schema_base64,
+                                     const char *producer, const unsigned char *payload,
+                                     size_t payload_len, unsigned char *out, size_t cap,
+                                     size_t *written) {
     if (lane != ALN_LANE_JSON) {
         /* This build writes the json lane. The other lanes are read only here. */
         return ALN_ERR_INVALID;
     }
-    if (payload_len > ALN_MAX_PAYLOAD_BYTES || schema_len > (ALN_MAX_HEADER_BYTES * 3u) / 4u) {
+    if (payload_len > ALN_MAX_PAYLOAD_BYTES) {
         return ALN_ERR_OVERSIZE;
-    }
-    const size_t schema_cap = ((schema_len + 2u) / 3u) * 4u + 1u;
-    char *schema_base64 = (char *)malloc(schema_cap);
-    if (schema_base64 == NULL) {
-        return ALN_ERR_NOMEM;
-    }
-    if (aln_base64_encode(schema, schema_len, schema_base64, schema_cap) == 0) {
-        free(schema_base64);
-        return ALN_ERR_INVALID;
     }
 
     char header[ALN_MAX_HEADER_BYTES + 1u];
-    const size_t header_len =
-        aln_header_json(header, sizeof header, "application/x-ndjson", ncols, producer,
-                        schema_base64);
-    free(schema_base64);
+    const size_t header_len = aln_header_json(header, sizeof header, "application/x-ndjson",
+                                              ncols, producer, schema_base64);
     if (header_len == 0) {
         return ALN_ERR_OVERSIZE;
     }
 
     const size_t total = ALN_PREFIX_BYTES + header_len + payload_len;
     if (cap < total) {
-        return ALN_ERR_NOMEM;
+        return ALN_ERR_BUFFER_SMALL;
     }
 
     const uint32_t crc =
@@ -136,13 +128,38 @@ enum aln_status aln_frame_encode(uint8_t lane, uint16_t flags, uint64_t rows, ui
 
     memcpy(out + ALN_PREFIX_BYTES, header, header_len);
     memcpy(out + ALN_PREFIX_BYTES + header_len, payload, payload_len);
-    if (written != NULL) {
+    if (written != nullptr) {
         *written = total;
     }
     return ALN_OK;
 }
 
-enum aln_status aln_frame_decode(const uint8_t *wire, size_t len, struct aln_frame *out) {
+enum aln_status aln_frame_encode(enum aln_lane lane, uint16_t flags, uint64_t rows,
+                                 uint64_t ncols,
+                                 uint64_t uncompressed_len, const unsigned char *schema,
+                                 size_t schema_len, const char *producer,
+                                 const unsigned char *payload, size_t payload_len, unsigned char *out,
+                                 size_t cap, size_t *written) {
+    if (schema_len > (ALN_MAX_HEADER_BYTES * 3u) / 4u) {
+        return ALN_ERR_OVERSIZE;
+    }
+    const size_t schema_cap = ((schema_len + 2u) / 3u) * 4u + 1u;
+    char *schema_base64 = (char *)malloc(schema_cap);
+    if (schema_base64 == nullptr) {
+        return ALN_ERR_NOMEM;
+    }
+    if (aln_base64_encode(schema, schema_len, schema_base64, schema_cap) == 0) {
+        free(schema_base64);
+        return ALN_ERR_INVALID;
+    }
+    const enum aln_status status =
+        aln_frame_encode_b64(lane, flags, rows, ncols, uncompressed_len, schema_base64, producer,
+                             payload, payload_len, out, cap, written);
+    free(schema_base64);
+    return status;
+}
+
+enum aln_status aln_frame_decode(const unsigned char *wire, size_t len, struct aln_frame *out) {
     if (len < ALN_PREFIX_BYTES) {
         return ALN_ERR_TRUNCATED;
     }
@@ -171,14 +188,14 @@ enum aln_status aln_frame_decode(const uint8_t *wire, size_t len, struct aln_fra
     if ((uint64_t)ALN_PREFIX_BYTES + header_len + payload_len != (uint64_t)len) {
         return ALN_ERR_TRUNCATED;
     }
-    const uint8_t *payload = wire + ALN_PREFIX_BYTES + header_len;
+    const unsigned char *payload = wire + ALN_PREFIX_BYTES + header_len;
     const uint32_t actual =
         aln_crc32_have_asm() ? aln_crc32_asm(payload, (size_t)payload_len)
                              : aln_crc32(payload, (size_t)payload_len);
     if (actual != crc) {
         return ALN_ERR_CHECKSUM;
     }
-    if (out != NULL) {
+    if (out != nullptr) {
         out->lane = lane;
         out->flags = flags;
         out->rows = rows;

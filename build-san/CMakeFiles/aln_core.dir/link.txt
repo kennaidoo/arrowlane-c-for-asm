@@ -1,0 +1,2 @@
+/usr/bin/ar qc libaln_core.a CMakeFiles/aln_core.dir/src/crc32.c.o CMakeFiles/aln_core.dir/src/base64.c.o CMakeFiles/aln_core.dir/src/frame.c.o CMakeFiles/aln_core.dir/src/json_fixture.c.o CMakeFiles/aln_core.dir/src/fixture_alloc.c.o CMakeFiles/aln_core.dir/src/format.c.o CMakeFiles/aln_core.dir/src/fixture.f90.o CMakeFiles/aln_core.dir/src/crc32_x86.S.o
+/usr/bin/ranlib libaln_core.a

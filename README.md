@@ -41,13 +41,42 @@ Honest scope, because the other three implementations do more:
 - **no chunk streams.**
 - **the assembly kernel is x86-64 System V only.** On other targets, including Windows, the portable C checksum runs instead, and the test says so instead of failing.
 
+## Standards
+
+This project targets **C23** (ISO/IEC 9899:2024) and **Fortran 2023**
+(ISO/IEC 1539-1:2023), and uses what they add rather than the oldest portable
+subset:
+
+| Feature | Where | Why |
+|---|---|---|
+| `[[nodiscard]]` | every status returning function | the whole API contract is "check my status" |
+| `constexpr` | the wire constants in `include/aln.h` | constant expressions, not macros |
+| `nullptr` | every pointer test | one null value, with its own type |
+| `enum : unsigned char` | `aln_lane`, `aln_status` | the ABI cannot drift with the compiler's enum size |
+| `static_assert` | prefix size, integer width | the wire assumptions are checked at compile time |
+| digit separators | `0xEDB8'8320` | the polynomial reads as the value in the spec |
+| `bool` as a keyword | the two flag columns | it is the type a Fortran `logical(c_bool)` maps to |
+| `do concurrent` | the fixture loop | each row is independent, and the compiler may reorder |
+| `logical(c_bool)` | the Fortran interface | the flags are booleans on both sides of the call |
+
+The cost is a compiler floor: **GCC 14 or later** for both languages, which
+`CMakeLists.txt` enforces with a version check rather than letting the build fail
+obscurely. Ubuntu 24.04 ships GCC 13, so CI installs `gcc-14` and `gfortran-14`
+explicitly.
+
 ## Build
 
-Linux or WSL, with a C compiler, gfortran, and CMake 3.20 or later:
+Linux or WSL, with GCC 14 (C and Fortran) and CMake 3.20 or later:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+```
+
+On a machine whose default compiler is older, name the newer one:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release   -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_Fortran_COMPILER=gfortran-14
 ```
 
 ## Test
@@ -86,18 +115,18 @@ json           42505756      885.642       37.858
 
 200,000 rows, Release, five repeats, median, on one machine:
 
-| Implementation | Wire bytes | Encode ms | Decode ms |
+| Implementation | Wire bytes | Encode ms | Validate ms |
 |---|---|---|---|
 | Python reference | 42,505,756 | 2,131.7 | 2,081.9 |
 | C++ port | 42,505,784 | 244.7 | 827.4 |
-| this project | **42,505,756** | 885.6 | 37.9 |
+| this project | **42,505,756** | 473.6 | 37.3 |
 
-The encode column is a fair comparison: 2.4 times faster than the Python reference,
-3.6 times slower than the C++ port. The gap is one function, the shortest-round-trip
-float formatter, which searches `printf` precisions and reads each back. That is
-correct and slow, and a Ryu style formatter is the next lever.
+The encode column is a fair comparison: 4.5 times faster than the Python reference,
+1.9 times slower than the C++ port. It started at 885.6 ms and reached 473.6 in two
+measured steps: a binary search for the shortest float precision instead of counting
+upward, and C23 with Fortran 2023 on GCC 14.
 
-The decode column is **not** a comparison. This build validates the prefix and the
+The validate column is **not** a comparison. This build validates the prefix and the
 checksum and returns a view of the payload. The other two parse the payload into
 columns. `docs/performance.md` states that plainly rather than claiming a win.
 

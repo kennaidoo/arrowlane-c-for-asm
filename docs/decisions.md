@@ -45,3 +45,22 @@ implementations, and both the README and `docs/performance.md` say so.
 
 Reverse if a caller needs a table back, which would mean a parser and a column
 builder.
+
+## D5 C23 and Fortran 2023, and the floor they set
+
+Both standards are used as written: `[[nodiscard]]`, `constexpr`, `nullptr`, fixed
+underlying enum types, `static_assert`, digit separators and `bool` on the C side,
+and `do concurrent` plus `logical(c_bool)` on the Fortran side.
+
+The cost is that the build needs GCC 14 or later for both languages. Debian
+bookworm's GCC 12 cannot do either, and Ubuntu 24.04's default GCC 13 cannot do
+C23 without `-std=c2x` and has only partial Fortran 2023.
+
+Why accept that cost: the alternative is a macro based imitation of each feature.
+`ALN_NODISCARD` would be `__attribute__((warn_unused_result))`, the constants would
+be macros with no type, and the flags would be `int8_t` with implicit conversions on
+both sides of the language boundary. The standards give the real thing.
+
+Reverse if the project needs to build on a distribution whose compiler is older than
+GCC 14, which would mean either a compatibility layer or dropping to C17 and
+Fortran 2018.

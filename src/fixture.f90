@@ -19,30 +19,24 @@ contains
       bind(c, name="aln_fill_fixture")
     integer(c_int64_t), value, intent(in) :: rows
     integer(c_int64_t), intent(out) :: id(*)
-    integer(c_int8_t), intent(out) :: name_is_null(*)
+    logical(c_bool), intent(out) :: name_is_null(*)
     real(c_double), intent(out) :: score(*)
-    integer(c_int8_t), intent(out) :: ok(*)
+    logical(c_bool), intent(out) :: ok(*)
     integer(c_int32_t), intent(out) :: day(*)
     integer(c_int64_t), intent(out) :: amount(*)
     integer(c_int64_t), intent(out) :: ts_us(*)
     integer(c_int8_t), intent(out) :: blob(*)
     integer(c_int64_t) :: i, base
 
-    do i = 1_c_int64_t, rows
+    ! Fortran 2008 syntax, and the compiler is free to run the iterations in any
+    ! order, which is the point: each row is independent.
+    do concurrent (i = 1_c_int64_t:rows)
       base = i - 1_c_int64_t
       id(i) = base
       ! The reference nulls every seventh row, not only the first.
-      if (mod(base, 7_c_int64_t) == 0_c_int64_t) then
-        name_is_null(i) = 1_c_int8_t
-      else
-        name_is_null(i) = 0_c_int8_t
-      end if
+      name_is_null(i) = mod(base, 7_c_int64_t) == 0_c_int64_t
       score(i) = real(base, c_double) / 3.0_c_double
-      if (mod(base, 2_c_int64_t) == 0_c_int64_t) then
-        ok(i) = 1_c_int8_t
-      else
-        ok(i) = 0_c_int8_t
-      end if
+      ok(i) = mod(base, 2_c_int64_t) == 0_c_int64_t
       ! The reference wraps the day every 28 rows: 2026-01-01 to 2026-01-28.
       day(i) = 20454_c_int32_t + int(mod(base, 28_c_int64_t), c_int32_t)
       amount(i) = 1234_c_int64_t

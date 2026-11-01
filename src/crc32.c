@@ -10,13 +10,13 @@
 #include <stdint.h>
 
 uint32_t aln_crc32_tables[8][256];
-static int g_tables_ready = 0;
+static bool g_tables_ready = false;
 
 static void build_tables(void) {
     for (uint32_t index = 0; index < 256; ++index) {
         uint32_t value = index;
         for (int bit = 0; bit < 8; ++bit) {
-            value = (value & 1u) ? (0xEDB88320u ^ (value >> 1)) : (value >> 1);
+            value = (value & 1u) ? (ALN_CRC32_POLYNOMIAL ^ (value >> 1)) : (value >> 1);
         }
         aln_crc32_tables[0][index] = value;
     }
@@ -27,20 +27,20 @@ static void build_tables(void) {
             aln_crc32_tables[slice][index] = value;
         }
     }
-    g_tables_ready = 1;
+    g_tables_ready = true;
 }
 
-static uint32_t load_le32(const uint8_t *p) {
+static uint32_t load_le32(const unsigned char *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
            ((uint32_t)p[3] << 24);
 }
 
-uint32_t aln_crc32(const uint8_t *data, size_t len) {
+uint32_t aln_crc32(const unsigned char *data, size_t len) {
     if (!g_tables_ready) {
         build_tables();
     }
     uint32_t crc = 0xFFFFFFFFu;
-    const uint8_t *cursor = data;
+    const unsigned char *cursor = data;
 
     while (len >= 8) {
         const uint32_t low = crc ^ load_le32(cursor);
@@ -60,15 +60,15 @@ uint32_t aln_crc32(const uint8_t *data, size_t len) {
 }
 
 #if !ALN_HAVE_ASM_CRC32
-uint32_t aln_crc32_asm(const uint8_t *data, size_t len) {
+uint32_t aln_crc32_asm(const unsigned char *data, size_t len) {
     return aln_crc32(data, len);
 }
 #endif
 
-int aln_crc32_have_asm(void) {
-    return ALN_HAVE_ASM_CRC32 ? 1 : 0;
+bool aln_crc32_have_asm(void) {
+    return ALN_HAVE_ASM_CRC32 != 0;
 }
 
-uint32_t aln_crc32_best(const uint8_t *data, size_t len) {
+uint32_t aln_crc32_best(const unsigned char *data, size_t len) {
     return aln_crc32_have_asm() ? aln_crc32_asm(data, len) : aln_crc32(data, len);
 }

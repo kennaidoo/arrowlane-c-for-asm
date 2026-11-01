@@ -4,21 +4,37 @@ on:
   push:
   pull_request:
 
+# No workflow here interpolates untrusted input: every run step is a fixed command,
+# so there is no injection surface from event payloads.
 jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # C23 and Fortran 2023 both need GCC 14. Ubuntu 24.04 ships GCC 13, so the
+      # newer toolchain is installed explicitly rather than assumed.
       - name: Install a toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gfortran cmake
+          sudo apt-get install -y gcc-14 gfortran-14 cmake
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_Fortran_COMPILER=gfortran-14
       - name: Build
         run: cmake --build build -j
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Test under sanitizers
+        run: |
+          cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=gcc-14 \
+            -DCMAKE_Fortran_COMPILER=gfortran-14 \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-san -j
+          ctest --test-dir build-san --output-on-failure
       # The numbers are part of the deliverable, so the job prints them.
       - name: Bench
         run: ./build/arrowlane-c-for-asm bench --rows 200000 --repeats 5
