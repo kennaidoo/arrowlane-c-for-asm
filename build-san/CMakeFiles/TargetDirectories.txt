@@ -1,8 +1,0 @@
-/src/build-san/CMakeFiles/aln_core.dir
-/src/build-san/CMakeFiles/arrowlane-c-for-asm.dir
-/src/build-san/CMakeFiles/aln_test.dir
-/src/build-san/CMakeFiles/float_test.dir
-/src/build-san/CMakeFiles/fuzz_frame.dir
-/src/build-san/CMakeFiles/test.dir
-/src/build-san/CMakeFiles/edit_cache.dir
-/src/build-san/CMakeFiles/rebuild_cache.dir

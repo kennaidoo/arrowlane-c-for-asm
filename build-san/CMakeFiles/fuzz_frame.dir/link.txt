@@ -1,1 +1,0 @@
-/usr/bin/cc -fsanitize=address,undefined -fno-omit-frame-pointer -g -fsanitize=address,undefined CMakeFiles/fuzz_frame.dir/tests/fuzz_frame.c.o -o fuzz_frame  libaln_core.a -lm -lgfortran -lm -lquadmath -lm 

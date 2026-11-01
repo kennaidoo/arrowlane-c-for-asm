@@ -1,1 +1,0 @@
-/usr/bin/cc -fsanitize=address,undefined -fno-omit-frame-pointer -g -fsanitize=address,undefined CMakeFiles/float_test.dir/tests/float_test.c.o -o float_test  libaln_core.a -lm -lgfortran -lm -lquadmath -lm 
