@@ -16,7 +16,7 @@ The split is not decoration. It follows what each part of the job is:
 |---|---|---|---|
 | Wire and text | C | prefix, header, NDJSON writer, base64 | byte work with no abstraction to pay for |
 | Fixture and statistics | Fortran | the eight column arrays, the median | dense numeric loops, and it is honest about its own slice being small |
-| Checksum | assembly | CRC-32, slicing by eight, x86-64 | the one loop where hand written code can be read and measured directly |
+| Checksum | assembly | CRC-32 on x86-64 and on aarch64 | the one loop where hand written code earns its place: eight tables on x86, two instructions on ARM |
 
 The Fortran slice is deliberately small. The codec is byte plumbing, and pretending
 otherwise would be a worse design than admitting it.
@@ -30,7 +30,11 @@ about compatibility rather than about self consistency:
 - the whole frame for that table is **1372 bytes and identical to the byte**, header included;
 - the checksum of that payload is `0xCA8AB4F0`, which is what the reference computes;
 - a frame the reference wrote decodes here, with the prefix fields and the checksum verified;
-- damaged frames are refused: bad magic, bad version, truncation, and a single flipped payload byte.
+- damaged frames are refused: bad magic, bad version, truncation, and a single flipped payload byte;
+- 20,000 random frames never crash the decoder, half of them starting from a valid prefix;
+- 4,499 doubles format to exactly the reference's text, and 20 adversarial strings
+  escape to exactly the reference's literals, including every control character and
+  an embedded NUL.
 
 ## What this does not do
 
@@ -58,6 +62,10 @@ subset:
 | `bool` as a keyword | the two flag columns | it is the type a Fortran `logical(c_bool)` maps to |
 | `do concurrent` | the fixture loop | each row is independent, and the compiler may reorder |
 | `logical(c_bool)` | the Fortran interface | the flags are booleans on both sides of the call |
+
+The binary is also built hardened: `-fstack-protector-strong`, `-fPIE -pie`,
+`-Wl,-z,relro,-z,now` and `_FORTIFY_SOURCE=3`, so a memory bug is a crash and not an
+exploit.
 
 The cost is a compiler floor: **GCC 14 or later** for both languages, which
 `CMakeLists.txt` enforces with a version check rather than letting the build fail
@@ -119,12 +127,13 @@ json           42505756      885.642       37.858
 |---|---|---|---|
 | Python reference | 42,505,756 | 2,131.7 | 2,081.9 |
 | C++ port | 42,505,784 | 244.7 | 827.4 |
-| this project | **42,505,756** | 473.6 | 37.3 |
+| this project | **42,505,756** | 361.7 | 35.9 |
 
 The encode column is a fair comparison: 4.5 times faster than the Python reference,
-1.9 times slower than the C++ port. It started at 885.6 ms and reached 473.6 in two
-measured steps: a binary search for the shortest float precision instead of counting
-upward, and C23 with Fortran 2023 on GCC 14.
+1.5 times slower than the C++ port. It started at 885.6 ms and reached 361.7 in
+three measured steps: a shorter search for the float precision, C23 with Fortran
+2023 on GCC 14, and probing the precisions that carry almost all doubles before
+falling back to a search.
 
 The validate column is **not** a comparison. This build validates the prefix and the
 checksum and returns a view of the payload. The other two parse the payload into

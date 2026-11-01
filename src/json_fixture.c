@@ -1,13 +1,12 @@
-/* The NDJSON writer for the benchmark fixture.
+/* The NDJSON writer for the benchmark fixture, and the JSON string escaper.
  *
  * Eight columns, written in schema order, with the same tagged objects the
  * reference writes for values JSON cannot carry:
  *   {"$":"date","v":"2026-01-01"}  {"$":"dec","v":"12.34"}
  *   {"$":"ts","v":"2026-10-28T12:00:00+00:00"}  {"$":"bin","v":"AAEC"}
  *
- * Floats are printed at the shortest precision that reads back as the same double,
- * which is what the reference's encoder emits. Integral values keep one decimal,
- * so 0 prints as 0.0 and not as 0.
+ * The escaper is public and tested against the reference, because untrusted text
+ * reaching the wire is the one place where a codec becomes a security problem.
  */
 #include "aln.h"
 
@@ -51,25 +50,77 @@ static void w_format(struct writer *w, const char *format, ...) {
     w_bytes(w, scratch, (size_t)written);
 }
 
-static void w_json_string(struct writer *w, const char *text) {
-    w_text(w, "\"");
-    for (const unsigned char *cursor = (const unsigned char *)text; *cursor != 0; ++cursor) {
-        const unsigned char value = *cursor;
-        if (value == '"' || value == '\\') {
-            const char pair[2] = {'\\', (char)value};
-            w_bytes(w, pair, 2);
-        } else if (value < 0x20) {
-            w_format(w, "\\u%04x", (unsigned)value);
-        } else {
-            w_bytes(w, (const char *)cursor, 1);
+size_t aln_json_string(char *out, size_t cap, const char *text, size_t len) {
+    /* The reference escapes the quote, the backslash, the five short control
+     * escapes, and any other character below 0x20 as \u00XX. UTF-8 passes through
+     * unchanged. A hex table is used rather than printf, so there is no format
+     * string to get wrong. */
+    static const char kHex[] = "0123456789abcdef";
+    size_t used = 0;
+    const size_t limit = (cap == 0u) ? 0u : cap - 1u;
+#define ALN_PUT(character)                                                                  \
+    do {                                                                                    \
+        if (used >= limit) {                                                                \
+            return 0;                                                                       \
+        }                                                                                   \
+        out[used++] = (character);                                                          \
+    } while (0)
+
+    ALN_PUT('"');
+    for (size_t index = 0; index < len; ++index) {
+        const unsigned char value = (unsigned char)text[index];
+        switch (value) {
+        case '"':
+            ALN_PUT('\\');
+            ALN_PUT('"');
+            break;
+        case '\\':
+            ALN_PUT('\\');
+            ALN_PUT('\\');
+            break;
+        case 0x08u:
+            ALN_PUT('\\');
+            ALN_PUT('b');
+            break;
+        case 0x09u:
+            ALN_PUT('\\');
+            ALN_PUT('t');
+            break;
+        case 0x0Au:
+            ALN_PUT('\\');
+            ALN_PUT('n');
+            break;
+        case 0x0Cu:
+            ALN_PUT('\\');
+            ALN_PUT('f');
+            break;
+        case 0x0Du:
+            ALN_PUT('\\');
+            ALN_PUT('r');
+            break;
+        default:
+            if (value < 0x20u) {
+                ALN_PUT('\\');
+                ALN_PUT('u');
+                ALN_PUT('0');
+                ALN_PUT('0');
+                ALN_PUT(kHex[(value >> 4) & 0x0Fu]);
+                ALN_PUT(kHex[value & 0x0Fu]);
+            } else {
+                ALN_PUT((char)value);
+            }
+            break;
         }
     }
-    w_text(w, "\"");
+    ALN_PUT('"');
+#undef ALN_PUT
+    out[used] = '\0';
+    return used;
 }
 
 /* Days since 1970-01-01 to a civil date. Howard Hinnant's algorithm. */
 static void civil_from_days(int64_t days, int *year, unsigned *month, unsigned *day) {
-    int64_t z = days + 719468;
+    const int64_t z = days + 719468;
     const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
     const unsigned doe = (unsigned)(z - era * 146097);
     const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
@@ -148,9 +199,13 @@ enum aln_status aln_json_fixture_encode(const struct aln_fixture *fixture, char 
         } else {
             /* The reference names a row from its index, so there is nothing to store. */
             char name[32];
-            const int length = snprintf(name, sizeof name, "row-%llu", (unsigned long long)row);
-            w_json_string(&w, name);
-            (void)length;
+            snprintf(name, sizeof name, "row-%llu", (unsigned long long)row);
+            char escaped[80];
+            const size_t length = aln_json_string(escaped, sizeof escaped, name, strlen(name));
+            if (length == 0) {
+                return ALN_ERR_BUFFER_SMALL;
+            }
+            w_bytes(&w, escaped, length);
         }
 
         w_text(&w, ",\"score\":");

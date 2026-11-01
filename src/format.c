@@ -33,20 +33,35 @@ size_t aln_format_double(char *out, size_t cap, double value) {
         return 0; /* the lane has no form for these */
     }
 
-    /* The shortest scientific form: d.dddde+XX */
-    int low = 0;
-    int high = 16;
+    /* Most doubles need 15 to 17 significant digits, so those are tried first and
+     * the general search only runs when a shorter form exists. */
     char text[40];
-    snprintf(text, sizeof text, "%.16e", value);
-    while (low <= high) {
-        const int middle = (low + high) / 2;
-        char candidate[40];
-        snprintf(candidate, sizeof candidate, "%.*e", middle, value);
-        if (strtod(candidate, nullptr) == value) {
-            memcpy(text, candidate, sizeof text);
-            high = middle - 1;
-        } else {
-            low = middle + 1;
+    char candidate[40];
+    int found = 0;
+    for (int digits = 17; digits >= 15; --digits) {
+        snprintf(candidate, sizeof candidate, "%.*e", digits - 1, value);
+        if (strtod(candidate, NULL) != value) {
+            break;
+        }
+        memcpy(text, candidate, sizeof text);
+        found = digits;
+    }
+    if (found == 0) {
+        /* Even 17 digits did not round-trip, which a double always should. */
+        snprintf(text, sizeof text, "%.16e", value);
+    } else if (found == 15) {
+        /* 15 digits worked, so a shorter form may exist: halve the range below. */
+        int low = 1;
+        int high = 14;
+        while (low <= high) {
+            const int middle = (low + high) / 2;
+            snprintf(candidate, sizeof candidate, "%.*e", middle - 1, value);
+            if (strtod(candidate, NULL) == value) {
+                memcpy(text, candidate, sizeof text);
+                high = middle - 1;
+            } else {
+                low = middle + 1;
+            }
         }
     }
 

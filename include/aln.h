@@ -99,6 +99,15 @@ ALN_NODISCARD size_t aln_format_double(char *out, size_t cap, double value);
 ALN_NODISCARD size_t aln_base64_encode(const unsigned char *input, size_t len, char *out,
                                        size_t cap);
 
+/* Writes a JSON string literal, quotes included, escaping exactly what the
+ * reference escapes: quote, backslash, the five short control escapes, and any
+ * other character below 0x20 as \u00XX. UTF-8 passes through unchanged.
+ *
+ * The length is explicit because untrusted text may contain a NUL, and a codec that
+ * stops at the first NUL silently truncates the record. Returns the length written,
+ * or 0 when the buffer is too small. */
+ALN_NODISCARD size_t aln_json_string(char *out, size_t cap, const char *text, size_t len);
+
 /* Decodes standard base64 with padding. Returns the byte count, or 0 on bad input. */
 ALN_NODISCARD size_t aln_base64_decode(const char *text, size_t len, unsigned char *out,
                                        size_t cap);

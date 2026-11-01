@@ -8,29 +8,30 @@ the same machine.
 |---|---|---|---|
 | Python reference | 42,505,756 | 2,131.7 | 2,081.9 |
 | C++ port | 42,505,784 | 244.7 | 827.4 |
-| this project | **42,505,756** | 473.6 | 37.3 |
+| this project | **42,505,756** | 361.7 | 35.9 |
 
 The encode column is a fair comparison: every implementation produces the whole
 NDJSON payload from the same table, and the byte counts agree.
 
-This project is 4.5 times faster than the Python reference on encode and 1.9 times
+This project is 5.9 times faster than the Python reference on encode and 1.5 times
 slower than the C++ port.
 
-## How the encode got from 885.6 to 473.6
+## Where the encode time went
 
-Two changes, both measured.
+Measured, not assumed. The float formatter was 313 ms of a 487 ms encode, which is
+64 percent, so that is where the work went.
 
-**The float formatter, 885.6 to 522.6.** The first version counted precision upward
-from one, so a double needing sixteen digits cost sixteen `snprintf` calls and
-sixteen `strtod` calls. Round-tripping is monotonic in precision, so a binary search
-finds the same precision in about five attempts. Same output, fewer attempts.
+| Step | Encode ms | What changed |
+|---|---|---|
+| first working version | 885.6 | counting the float precision upward from one |
+| binary search over precision | 522.6 | same answer, about five probes instead of seventeen |
+| C23 and Fortran 2023 on GCC 14 | 473.6 | `do concurrent` in the fixture, better code generation |
+| probe 17, 16, 15 first | 361.7 | most doubles need 15 to 17 digits, so the search rarely runs |
 
-**The standards, 522.6 to 473.6.** C23 and Fortran 2023 with GCC 14. The fixture
-loop is now `do concurrent`, which lets the compiler reorder independent rows, and
-GCC 14 generates better code for the rest.
-
-The formatter rewrite is where the real work was, and it needed the corpus below to
-be safe.
+The last step is the interesting one. A binary search over 1 to 17 always costs about
+five probes. Almost every double needs 15, 16 or 17 significant digits, so trying
+those three first answers the question in one or two probes and the general search
+only runs when a shorter form exists.
 
 ## The float corpus
 
@@ -41,7 +42,7 @@ the reference on **26 of those values**:
 
 | Value | printf layout | the reference |
 |---|---|---|
-| 2.16730536470823e-05 | `2.16730536470823e-05` | `0.0000210536470823` |
+| 2.16730536470823e-05 | `2.16730536470823e-05` | `0.0000216730536470823` |
 | 1.668350888475325e-07 | `1.668350888475325e-07` | `1.668350888475325e-7` |
 
 Two rules differ. The reference prints plain notation while the decimal exponent of
@@ -50,8 +51,25 @@ exponent**: `1e+16`, `1e-7`, `-9.119925651242736e-309`. `printf` switches to
 scientific at -5 and pads the exponent to two digits.
 
 The rules in `src/format.c` were derived from the corpus, not from documentation, and
-the corpus now passes with 0 mismatches. That is why the payload is still byte
-identical at 200,000 rows.
+the corpus now passes with 0 mismatches.
+
+## The escaping corpus, and the security defect it found
+
+`tests/fixtures/string_corpus.txt` holds adversarial text and the exact JSON literal
+the reference emits: quotes, backslashes, every control character, UTF-8, a 300 byte
+string, and an embedded NUL. It found four real defects in the first escaper:
+
+| Case | First version | The reference |
+|---|---|---|
+| newline | `\u000a` | `\n` |
+| tab | `\u0009` | `\t` |
+| carriage return | `\u000d` | `\r` |
+| embedded NUL | record truncated at the NUL | `\u0000`, and the rest of the text |
+
+The fourth is the serious one. The escaper took a `const char *` and stopped at the
+first NUL, so untrusted text containing a NUL byte silently truncated the record and
+produced a different document. The function now takes an explicit length, and the
+test pins the behaviour.
 
 ## What the validate column means, and why it is not a comparison
 
@@ -64,9 +82,8 @@ that it measures less work.
 - This project validates the 38 byte prefix, verifies the CRC-32 over the payload,
   and returns a pointer to the payload.
 
-So 37.3 ms is the cost of checking a frame, not the cost of rebuilding a table. The
-number is useful, and it is not a win. The README and `bench --json` both name the
-column `validate` for that reason.
+So 35.9 ms is the cost of checking a frame, not the cost of rebuilding a table. The
+README and `bench --json` both name the column `validate` for that reason.
 
 ## Byte identity
 
@@ -77,22 +94,25 @@ column `validate` for that reason.
 | 200,000 rows, whole frame | 42,505,756 | identical to the reference, byte for byte |
 | 3 rows, checksum | `0xCA8AB4F0` | identical to the reference |
 
-The 200,000 row result survived three changes that could each have moved a byte: the
-formatter rewrite, the switch of the flag columns from `int8_t` to `bool`, and the
-`do concurrent` fixture loop. A size that still matches is a strong claim, because
-every field, separator, escape, date, timestamp, decimal and base64 blob has to agree
-for it to hold.
+The 200,000 row result survived five changes that could each have moved a byte: the
+formatter rewrite, the flag columns moving from `int8_t` to `bool`, the
+`do concurrent` fixture loop, the search order change, and the escaper rewrite. A
+size that still matches is a strong claim, because every field, separator, escape,
+date, timestamp, decimal and base64 blob has to agree for it to hold.
 
-## The checksum kernel
+## The checksum kernels
 
-The assembly kernel and the C kernel run the same slicing-by-eight algorithm over the
-same tables, and the test compares them on 4,096 random bytes at every length in
-steps of 97. They agree. On a target without the kernel, the C version runs and the
-test reports that it skipped the equality check instead of failing.
+Two hand written kernels, both verified against the C version on 4,096 random bytes
+at every length in steps of 97:
 
-On aarch64 the same checksum has hardware instructions, `crc32b` and `crc32x`, which
-use the IEEE polynomial. That kernel does not exist yet, and it is the obvious next
-piece of assembly.
+- **x86-64**: slicing by eight over eight lookup tables, in `src/crc32_x86.S`. The
+  SSE4.2 `crc32` instruction is the Castagnoli polynomial, a different checksum, so
+  the hardware does not help here.
+- **aarch64**: `crc32x` and `crc32b` in `src/crc32_aarch64.S`, about twenty
+  instructions, because the ARMv8 CRC extension is the IEEE polynomial.
+
+On a target with neither, the portable C kernel runs and the test reports that it
+skipped the equality check instead of failing.
 
 ## What the standards upgrade found
 

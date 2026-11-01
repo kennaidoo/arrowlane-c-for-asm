@@ -16,6 +16,14 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU" AND CMAKE_Fortran_COMPILER_VERSION V
   message(FATAL_ERROR "Fortran 2023 needs GCC 14 or later, found ${CMAKE_Fortran_COMPILER_VERSION}")
 endif()
 
+# Hardening. These cost nothing measurable and they are what turns a memory bug
+# from an exploit into a crash.
+if(NOT MSVC)
+  add_compile_options(-fstack-protector-strong -fPIE)
+  add_link_options(-pie -Wl,-z,relro,-z,now)
+  add_compile_definitions(_FORTIFY_SOURCE=3)
+endif()
+
 option(ALN_ASM_CRC32 "Use the hand written x86-64 checksum kernel" ON)
 
 set(ALN_CORE_SOURCES
@@ -33,10 +41,19 @@ target_include_directories(aln_core PUBLIC include)
 target_compile_options(aln_core PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
 
 set(ALN_HAVE_ASM 0)
-if(ALN_ASM_CRC32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND NOT MSVC)
-  enable_language(ASM)
-  target_sources(aln_core PRIVATE src/crc32_x86.S)
-  set(ALN_HAVE_ASM 1)
+if(ALN_ASM_CRC32 AND NOT MSVC)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    # Slicing by eight over tables, because x86 has no CRC-32 instruction for this
+    # polynomial: the SSE4.2 crc32 instruction is Castagnoli, a different checksum.
+    enable_language(ASM)
+    target_sources(aln_core PRIVATE src/crc32_x86.S)
+    set(ALN_HAVE_ASM 1)
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+    # ARMv8 crc32x and crc32b are the IEEE polynomial, so the hardware does it.
+    enable_language(ASM)
+    target_sources(aln_core PRIVATE src/crc32_aarch64.S)
+    set(ALN_HAVE_ASM 1)
+  endif()
 endif()
 target_compile_definitions(aln_core PRIVATE ALN_HAVE_ASM_CRC32=${ALN_HAVE_ASM})
 
@@ -58,6 +75,13 @@ target_compile_definitions(float_test PRIVATE
   ALN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
 add_test(NAME aln_test COMMAND aln_test)
 add_test(NAME float_test COMMAND float_test)
+
+add_executable(string_test tests/string_test.c)
+target_link_libraries(string_test PRIVATE aln_core m)
+target_compile_options(string_test PRIVATE -Wall -Wextra)
+target_compile_definitions(string_test PRIVATE
+  ALN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+add_test(NAME string_test COMMAND string_test)
 
 add_executable(fuzz_frame tests/fuzz_frame.c)
 target_link_libraries(fuzz_frame PRIVATE aln_core m)

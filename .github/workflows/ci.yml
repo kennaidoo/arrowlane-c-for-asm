@@ -38,3 +38,22 @@ jobs:
       # The numbers are part of the deliverable, so the job prints them.
       - name: Bench
         run: ./build/arrowlane-c-for-asm bench --rows 200000 --repeats 5
+
+  # The same tests on real aarch64 hardware, where the checksum uses crc32x.
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install a toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 gfortran-14 cmake
+      - name: Configure
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release             -DCMAKE_C_COMPILER=gcc-14             -DCMAKE_Fortran_COMPILER=gfortran-14
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Bench
+        run: ./build/arrowlane-c-for-asm bench --rows 200000 --repeats 5
